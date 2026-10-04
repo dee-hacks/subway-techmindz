@@ -1,0 +1,222 @@
+﻿import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { requestAPI } from '../services/api';
+import toast from 'react-hot-toast';
+import { useAuth } from '../context/AuthContext';
+import { connectSocket, joinStaffRoom, getSocket } from '../services/socket';
+
+const StaffDashboard = () => {
+  const { user, logout } = useAuth();
+  const navigate = useNavigate();
+  const [requests, setRequests] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState('all');
+
+  useEffect(() => {
+    if (!user) {
+      navigate('/staff/login');
+      return;
+    }
+    connectSocket();
+    joinStaffRoom();
+    fetchRequests();
+    const socket = getSocket();
+    socket.on('new_request', (request) => {
+      setRequests((prev) => [request, ...prev]);
+      toast.success('New request received!', { duration: 5000, icon: '🔔' });
+    });
+    socket.on('request_updated', (updatedRequest) => {
+      setRequests((prev) => prev.map((req) => req._id === updatedRequest._id ? updatedRequest : req));
+    });
+    return () => {
+      socket.off('new_request');
+      socket.off('request_updated');
+    };
+  }, [user, navigate]);
+
+  const fetchRequests = async () => {
+    try {
+      const response = await requestAPI.getAll();
+      setRequests(response.data);
+    } catch (err) {
+      toast.error('Failed to fetch requests');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleLogout = () => {
+    logout();
+    navigate('/staff/login');
+  };
+
+  const updateRequestStatus = async (id, status) => {
+    try {
+      await requestAPI.updateStatus(id, status);
+      toast.success('Status updated');
+      fetchRequests();
+    } catch (err) {
+      toast.error('Update failed');
+    }
+  };
+
+  const getPriorityColor = (priority) => {
+    const colors = { NORMAL: 'bg-green-100 text-green-800', URGENT: 'bg-orange-100 text-orange-800', CRITICAL: 'bg-red-100 text-red-800' };
+    return colors[priority] || 'bg-gray-100 text-gray-800';
+  };
+
+  const getStatusColor = (status) => {
+    const colors = { REQUESTED: 'bg-yellow-100 text-yellow-800', ACCEPTED: 'bg-blue-100 text-blue-800', IN_PROGRESS: 'bg-orange-100 text-orange-800', RESOLVED: 'bg-green-100 text-green-800', CANCELLED: 'bg-gray-100 text-gray-800' };
+    return colors[status] || 'bg-gray-100 text-gray-800';
+  };
+
+  const getCategoryIcon = (category) => {
+    const icons = { WATER: '💧', FOOD: '🍱', CLEANING: '🧹', GENERAL_ASSISTANCE: '🧑‍✈️', MEDICAL_ASSISTANCE: '🩺', SECURITY_CONCERN: '🔐', LOST_CHILD: '👶', SERIOUS_COACH_ISSUE: '🚻', PERSONAL_SAFETY: '🚨', FIRE: '🔥', MEDICAL_EMERGENCY: '🚑', ACCIDENT: '⚠️', OTHER_EMERGENCY: '🆘' };
+    return icons[category] || '📋';
+  };
+
+  const filteredRequests = requests.filter((req) => {
+    if (filter === 'all') return true;
+    if (filter === 'active') return ['REQUESTED', 'ACCEPTED', 'IN_PROGRESS'].includes(req.status);
+    if (filter === 'emergency') return req.priority === 'CRITICAL';
+    return req.status === filter.toUpperCase();
+  });
+
+  const stats = {
+    total: requests.length,
+    pending: requests.filter((r) => r.status === 'REQUESTED').length,
+    inProgress: requests.filter((r) => r.status === 'IN_PROGRESS').length,
+    resolved: requests.filter((r) => r.status === 'RESOLVED').length,
+    emergency: requests.filter((r) => r.priority === 'CRITICAL').length
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="animate-spin rounded-full h-16 w-16 border-b-4 border-primary-600"></div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50 flex">
+      <aside className="w-64 bg-white shadow-md">
+        <div className="p-6">
+          <h1 className="text-2xl font-bold text-primary-600 mb-8">RailAssist</h1>
+          <nav className="space-y-2">
+            <a href="#" className="sidebar-link active"><span>📊</span><span>Dashboard</span></a>
+            <a href="#" className="sidebar-link"><span>📋</span><span>Requests</span></a>
+            <a href="#" className="sidebar-link"><span>🚨</span><span>Emergency</span></a>
+            <a href="#" className="sidebar-link"><span>📜</span><span>History</span></a>
+          </nav>
+        </div>
+        <div className="absolute bottom-0 w-64 p-6 border-t">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="w-10 h-10 bg-primary-600 rounded-full flex items-center justify-center text-white font-semibold">
+              {user?.name?.charAt(0)}
+            </div>
+            <div>
+              <p className="font-semibold text-sm">{user?.name}</p>
+              <p className="text-xs text-gray-600">{user?.role}</p>
+            </div>
+          </div>
+          <button onClick={handleLogout} className="w-full text-left text-red-600 hover:text-red-700 text-sm font-medium">
+            Logout
+          </button>
+        </div>
+      </aside>
+
+      <main className="flex-1 p-8">
+        <div className="mb-8">
+          <h2 className="text-3xl font-bold text-gray-800">Staff Dashboard</h2>
+          <p className="text-gray-600">Manage and respond to passenger requests</p>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-6 mb-8">
+          <div className="bg-white rounded-lg shadow-md p-6">
+            <div className="text-3xl font-bold text-gray-800">{stats.total}</div>
+            <div className="text-gray-600">Total Requests</div>
+          </div>
+          <div className="bg-white rounded-lg shadow-md p-6">
+            <div className="text-3xl font-bold text-yellow-600">{stats.pending}</div>
+            <div className="text-gray-600">Pending</div>
+          </div>
+          <div className="bg-white rounded-lg shadow-md p-6">
+            <div className="text-3xl font-bold text-orange-600">{stats.inProgress}</div>
+            <div className="text-gray-600">In Progress</div>
+          </div>
+          <div className="bg-white rounded-lg shadow-md p-6">
+            <div className="text-3xl font-bold text-green-600">{stats.resolved}</div>
+            <div className="text-gray-600">Resolved</div>
+          </div>
+          <div className="bg-white rounded-lg shadow-md p-6">
+            <div className="text-3xl font-bold text-red-600">{stats.emergency}</div>
+            <div className="text-gray-600">Emergency</div>
+          </div>
+        </div>
+
+        <div className="mb-6">
+          <div className="flex gap-2">
+            {['all', 'active', 'emergency', 'resolved'].map((f) => (
+              <button key={f} onClick={() => setFilter(f)} className={`px-4 py-2 rounded-lg font-medium transition-colors ${filter === f ? 'bg-primary-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-100'}`}>
+                {f.charAt(0).toUpperCase() + f.slice(1)}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="space-y-4">
+          {filteredRequests.length === 0 ? (
+            <div className="bg-white rounded-lg shadow-md p-8 text-center">
+              <div className="text-6xl mb-4">📋</div>
+              <p className="text-gray-600">No requests found</p>
+            </div>
+          ) : (
+            filteredRequests.map((request) => (
+              <div key={request._id} className={`bg-white rounded-lg shadow-md p-6 border-l-4 ${request.priority === 'CRITICAL' ? 'border-red-500' : request.priority === 'URGENT' ? 'border-orange-500' : 'border-green-500'}`}>
+                <div className="flex items-start justify-between">
+                  <div className="flex items-start gap-4 flex-1">
+                    <div className="text-4xl">{getCategoryIcon(request.category)}</div>
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 mb-2">
+                        <h3 className="font-semibold text-gray-800 text-lg">{request.category.replace(/_/g, ' ')}</h3>
+                        <span className={`badge ${getPriorityColor(request.priority)}`}>{request.priority}</span>
+                        <span className={`badge ${getStatusColor(request.status)}`}>{request.status.replace(/_/g, ' ')}</span>
+                      </div>
+                      <div className="text-sm text-gray-600 space-y-1">
+                        <p><span className="font-semibold">Train:</span> {request.trainId?.trainNumber} - {request.trainId?.trainName}</p>
+                        <p><span className="font-semibold">Coach:</span> {request.coachId?.coachNumber} • <span className="font-semibold">Berth:</span> {request.seatId?.seatNumber}</p>
+                        <p><span className="font-semibold">Request ID:</span> {request.requestId}</p>
+                        <p><span className="font-semibold">Time:</span> {new Date(request.createdAt).toLocaleString()}</p>
+                      </div>
+                      {request.description && <p className="text-gray-700 mt-2 text-sm">{request.description}</p>}
+                    </div>
+                  </div>
+                  <div className="flex flex-col gap-2 ml-4">
+                    {request.status === 'REQUESTED' && (
+                      <button onClick={() => updateRequestStatus(request._id, 'ACCEPTED')} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors">
+                        Accept
+                      </button>
+                    )}
+                    {request.status === 'ACCEPTED' && (
+                      <button onClick={() => updateRequestStatus(request._id, 'IN_PROGRESS')} className="bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 rounded-lg font-medium transition-colors">
+                        Start Response
+                      </button>
+                    )}
+                    {request.status === 'IN_PROGRESS' && (
+                      <button onClick={() => updateRequestStatus(request._id, 'RESOLVED')} className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-medium transition-colors">
+                        Resolve
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+          )}
+        </div>
+      </main>
+    </div>
+  );
+};
+
+export default StaffDashboard;
